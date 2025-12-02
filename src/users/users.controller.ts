@@ -18,6 +18,11 @@ export class UsersController {
     return this.usersService.searchUsers(query, limit)
   }
 
+  @Get('/:userId')
+  getUser(@Param('userId') userId: string){
+    return this.usersService.getUser(userId)
+  }
+
   @Get('profile')
   getSelfProfile(@Request() request: { user: User }) {
 

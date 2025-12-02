@@ -32,6 +32,7 @@ export class WebsocketGateway
   
   private readonly logger = new Logger(WebsocketGateway.name)
   private clients = new Map<string, string>() // userId -> socketId
+  private connected_users = new Map<string, string>() // socketId -> userId
   
   constructor(private readonly websocketService: WebsocketService) {}
   
@@ -41,6 +42,7 @@ export class WebsocketGateway
     
     if (user_id && user_id !== 'null' && user_id !== 'undefined') {
       this.clients.set(user_id, client.id)
+      this.connected_users.set(client.id, user_id)
       this.logger.log(`User ${user_id} mapped to socket ${client.id}`)
       this.logger.log(`Total connected users: ${this.clients.size}`)
     } 
@@ -55,6 +57,7 @@ export class WebsocketGateway
     for (const [userId, socketId] of this.clients.entries()) {
       if (socketId === client.id) {
         this.clients.delete(userId)
+        this.connected_users.delete(client.id)
         this.logger.log(`User ${userId} disconnected`)
         break
       }
@@ -86,7 +89,8 @@ export class WebsocketGateway
       const target_socket_id = this.clients.get(target_id)
       
       if (target_socket_id) {
-        this.websocketServer.to(target_socket_id).emit('message', _payload)
+        messageData.target_id = this.connected_users.get(client.id) as string
+        this.websocketServer.to(target_socket_id).emit('message', JSON.stringify(messageData))
         
         this.logger.log(
           `Message ${message_id} forwarded to ${target_id}`
@@ -107,7 +111,7 @@ export class WebsocketGateway
           error: 'Recipient offline',
         })
       }
-      // return { event: 'message', data: messageData }
+      //return { event: 'message', data: messageData }
     } catch (error) {
       this.logger.error(`Error handling message: ${error.message}`)
       client.emit('error', {
