@@ -13,7 +13,7 @@ import { Logger } from '@nestjs/common'
 
 interface MessagePayload {
   target_id: string
-  message: string // Encrypted message JSON
+  payload: string // Encrypted message JSON
   message_id: string
   conversation_id: string
   timestamp: number
@@ -67,15 +67,15 @@ export class WebsocketGateway
   }
 
   @SubscribeMessage('message')
-  handleMessage(client: Socket, payload: string) {
+  handleMessage(client: Socket, _payload: string) {
     try {
-      const messageData: MessagePayload = JSON.parse(payload)
+      const messageData: MessagePayload = JSON.parse(_payload)
       this.logger.log(`Message received from ${client.id}`)
       this.logger.debug(`Payload: ${JSON.stringify(messageData)}`)
       
-      const { target_id, message, message_id, conversation_id, timestamp } = messageData
+      const { target_id, payload, message_id, conversation_id, timestamp } = messageData
       
-      if (!target_id || !message || !message_id || !conversation_id) {
+      if (!target_id || !payload || !message_id || !conversation_id) {
         this.logger.error('Invalid message payload')
         client.emit('error', {
           error: 'Invalid message format',
@@ -86,7 +86,7 @@ export class WebsocketGateway
       const target_socket_id = this.clients.get(target_id)
       
       if (target_socket_id) {
-        this.websocketServer.to(target_socket_id).emit('message', payload)
+        this.websocketServer.to(target_socket_id).emit('message', _payload)
         
         this.logger.log(
           `Message ${message_id} forwarded to ${target_id}`
@@ -107,7 +107,7 @@ export class WebsocketGateway
           error: 'Recipient offline',
         })
       }
-      return { event: 'message', data: messageData }
+      // return { event: 'message', data: messageData }
     } catch (error) {
       this.logger.error(`Error handling message: ${error.message}`)
       client.emit('error', {

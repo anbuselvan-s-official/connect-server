@@ -7,9 +7,10 @@ import { AuthModule } from './auth/auth.module'
 import { PrismaModule } from './prisma/prisma.module';
 import { KeysModule } from './keys/keys.module';
 import { UsersModule } from './users/users.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
-  imports: [RegisterationModule, WebsocketModule, AuthModule, PrismaModule, KeysModule, UsersModule],
+  imports: [RegisterationModule, WebsocketModule, AuthModule, PrismaModule, KeysModule, UsersModule, AnalyticsModule],
   controllers: [AppController],
   providers: [AppService],
 })

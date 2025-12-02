@@ -46,14 +46,22 @@ export class RegisterationService {
             })
         }
 
-        await this.prisma.oneTimePreKey.createMany({
-            data: one_time_pre_key.map(otpk => ({
-                key_id: otpk.key_id,
-                public_key: Buffer.from(otpk.public_key, 'base64'),
-                is_used: otpk.is_used,
-                user_id: user.id
-            })),
-            skipDuplicates: true
+        await this.prisma.$transaction(async function(transaction) {
+            await transaction.oneTimePreKey.deleteMany({
+                where: {
+                    user_id: user.id
+                }
+            })
+
+            await transaction.oneTimePreKey.createMany({
+                data: one_time_pre_key.map(otpk => ({
+                    key_id: otpk.key_id,
+                    public_key: Buffer.from(otpk.public_key, 'base64'),
+                    is_used: otpk.is_used,
+                    user_id: user.id
+                })),
+                skipDuplicates: true
+            })
         })
 
         prekeyBundle.user_id = user.id
