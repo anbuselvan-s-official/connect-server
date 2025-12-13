@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { WebSocketServer } from '@nestjs/websockets'
 import { User } from '@prisma/client'
 import { Server, Socket } from 'socket.io'
 import { PrismaService } from 'src/prisma/prisma.service'
@@ -42,12 +41,12 @@ export class WebsocketService {
     async onMessage(socket: Socket, messagePayload: string) {
         const payload: MessagePayload = JSON.parse(messagePayload)
         const sender = this.clients.get(socket.handshake.query.user_id as string)
-        const receiver = this.clients.get(payload.receiver)
+        const receiver = this.clients.get(payload.receiver.id)
         
         if (receiver) {
             const receipient_user = await this.users.getUser(receiver?.user.id || '')
 
-            if(payload.device_id === receipient_user.device_id){
+            if(payload.receiver.device_id === receipient_user.device_id){
                 this.websocketServer.to(receiver.socket_id).emit('message', JSON.stringify(payload))
                 this.logger.log(`onMessage - from: ${JSON.stringify(sender?.user)} | to: ${JSON.stringify(receiver.user)} | message: ${messagePayload}`)
             }
@@ -62,7 +61,7 @@ export class WebsocketService {
     onError(socket: Socket, messagePayload: string) {
         const payload: MessagePayload = JSON.parse(messagePayload)
         const sender = this.clients.get(socket.handshake.query.user_id as string)
-        const receiver = this.clients.get(payload.receiver)
+        const receiver = this.clients.get(payload.receiver.id)
 
         if (receiver) {
             this.websocketServer.to(receiver.socket_id).emit('error', JSON.stringify(payload))
