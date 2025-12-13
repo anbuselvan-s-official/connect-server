@@ -20,6 +20,7 @@ model User {
   public_key Bytes?
   created_at DateTime @default(now())
   updated_at DateTime @default(now())
+  device_id  String   @unique @default(uuid())
 
   RefreshToken RefreshToken[]
   SignedPreKey SignedPreKey[]
@@ -37,7 +38,7 @@ model RefreshToken {
   revoked    Boolean  @default(false)
 
   user_id String
-  user    User   @relation(fields: [user_id], references: [id])
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
 
 model SignedPreKey {
@@ -47,7 +48,7 @@ model SignedPreKey {
   expires_at DateTime
 
   user_id String
-  user    User   @relation(fields: [user_id], references: [id])
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
 
 model OneTimePreKey {
@@ -57,11 +58,11 @@ model OneTimePreKey {
   is_used    Boolean @default(false)
 
   user_id String
-  user    User   @relation(fields: [user_id], references: [id])
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
 
 model Profile {
-  id           Int      @id @default(autoincrement())
+  id           Int       @id @default(autoincrement())
   user_id      String
   display_name String?
   bio          String?
@@ -71,5 +72,5 @@ model Profile {
   interest     String?
   last_seen    DateTime?
 
-  user User @relation(fields: [user_id], references: [id])
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }

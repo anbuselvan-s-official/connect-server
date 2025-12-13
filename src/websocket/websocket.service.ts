@@ -1,50 +1,72 @@
 import { Injectable, Logger } from '@nestjs/common'
-
-interface QueuedMessage {
-    target_id: string
-    message: string
-    message_id: string
-    conversation_id: string
-    timestamp: number
-    queued_at: number
-}
+import { WebSocketServer } from '@nestjs/websockets'
+import { User } from '@prisma/client'
+import { Server, Socket } from 'socket.io'
+import { PrismaService } from 'src/prisma/prisma.service'
+import { UsersService } from 'src/users/users.service'
+import type MessagePayload from 'types/MessagePayload'
 
 @Injectable()
 export class WebsocketService {
-    private readonly logger = new Logger(WebsocketService.name)
-    private messageQueue: Map<string, QueuedMessage[]> = new Map()
-    queueOfflineMessage(message: QueuedMessage) {
-        const { target_id } = message
+    constructor(private readonly prisma: PrismaService, private readonly users: UsersService) { }
 
-        if (!this.messageQueue.has(target_id)) {
-            this.messageQueue.set(target_id, [])
+    private websocketServer: Server
+
+    private readonly logger = new Logger(WebsocketService.name)
+    private clients = new Map<string, { user: User, socket_id: string}>()
+
+    setServer(server: Server){
+        this.websocketServer = server
+    }
+
+    async handleConnection(socket: Socket) {
+        const user_id = socket.handshake.query.user_id as string
+        const user = await this.prisma.user.findUnique({ where: { id: user_id } })
+
+        if (user) {
+            this.clients.set(user_id, { user, socket_id: socket.id })
+            this.logger.log(`Connected - ${JSON.stringify(user)} | socket_id: ${socket.id}`)
         }
-        const userQueue = this.messageQueue.get(target_id) || []
-        userQueue.push({
-            ...message,
-            queued_at: Date.now(),
-        })
-        this.logger.log(`Message ${message.message_id} queued for user ${target_id}`)
     }
-    getQueuedMessages(userId: string): QueuedMessage[] {
-        return this.messageQueue.get(userId) || []
-    }
-    clearQueuedMessages(userId: string) {
-        const count = this.messageQueue.get(userId)?.length || 0
-        this.messageQueue.delete(userId)
-        this.logger.log(`Cleared ${count} queued messages for user ${userId}`)
-    }
-    getQueueStats() {
-        let totalMessages = 0
-        const userCounts: Record<string, number> = {}
-        for (const [userId, messages] of this.messageQueue.entries()) {
-            totalMessages += messages.length
-            userCounts[userId] = messages.length
+
+    handleDisconnection(socket: Socket) {
+        const user_id = socket.handshake.query.user_id as string
+        const client = this.clients.get(user_id)
+
+        if (client) {
+            this.clients.delete(user_id)
+            this.logger.log(`Disconnected - ${JSON.stringify(client)}`)
         }
-        return {
-            totalUsers: this.messageQueue.size,
-            totalMessages,
-            userCounts,
+    }
+
+    async onMessage(socket: Socket, messagePayload: string) {
+        const payload: MessagePayload = JSON.parse(messagePayload)
+        const sender = this.clients.get(socket.handshake.query.user_id as string)
+        const receiver = this.clients.get(payload.receiver)
+        
+        if (receiver) {
+            const receipient_user = await this.users.getUser(receiver?.user.id || '')
+
+            if(payload.device_id === receipient_user.device_id){
+                this.websocketServer.to(receiver.socket_id).emit('message', JSON.stringify(payload))
+                this.logger.log(`onMessage - from: ${JSON.stringify(sender?.user)} | to: ${JSON.stringify(receiver.user)} | message: ${messagePayload}`)
+            }
+            else {
+                payload.payload = 'DEVICE_ID_MISMATCH'
+                socket.emit('error', JSON.stringify(payload))
+                this.logger.warn(`Device ID mismatch: expected ${receipient_user.device_id}, got ${payload.device_id}`)
+            }
+        }
+    }
+
+    onError(socket: Socket, messagePayload: string) {
+        const payload: MessagePayload = JSON.parse(messagePayload)
+        const sender = this.clients.get(socket.handshake.query.user_id as string)
+        const receiver = this.clients.get(payload.receiver)
+
+        if (receiver) {
+            this.websocketServer.to(receiver.socket_id).emit('error', JSON.stringify(payload))
+            this.logger.log(`onError - from: ${JSON.stringify(sender?.user)} | to: ${JSON.stringify(receiver.user)} | message: ${messagePayload}`)
         }
     }
 }

@@ -5,10 +5,11 @@ import { randomBytes } from 'crypto'
 import bcrypt from 'bcrypt'
 import { PrismaService } from 'src/prisma/prisma.service'
 import { addDays, addMinutes } from 'date-fns'
+import { RedisService } from 'src/redis/redis.service'
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwtService: JwtService) {}
+  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly redis: RedisService) {}
 
   async requestOtp(mobile_number: string) {
     // In real app, send OTP via SMS here
@@ -27,6 +28,18 @@ export class AuthService {
     if (!user) {
       user = await this.prisma.user.create({ data: { mobile: mobile_number } });
     }
+    else {
+      await this.prisma.user.update({
+        data: {
+          device_id: crypto.randomUUID()
+        },
+        where: {
+          id: user.id
+        }
+      })
+    }
+
+    await this.redis.deleteCache(`user:${user.id}`)
 
     const access_token = this.generateAccessToken(user.id);
     const refresh_token = await this.generateRefreshToken(user.id);
@@ -36,13 +49,13 @@ export class AuthService {
 
   generateAccessToken(user_id: string) {
     const payload = { sub: user_id };
-    return this.jwtService.sign(payload, { expiresIn: '1m' });
+    return this.jwt.sign(payload, { expiresIn: '1m' });
   }
 
 
   async generateRefreshToken(user_id: string) {
     const refreshPayload = { sub: user_id };
-    const token = this.jwtService.sign(refreshPayload, { expiresIn: '7d' });
+    const token = this.jwt.sign(refreshPayload, { expiresIn: '7d' });
 
     const expires_at = addDays(new Date(), 7);
 

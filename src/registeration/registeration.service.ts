@@ -14,14 +14,13 @@ export class RegisterationService {
         if(!user) {
             throw new NotFoundException({ message: 'User not found' })
         } 
-        else {
-            user = await this.prisma.user.update({
-                where: { mobile: prekeyBundle.mobile_number },
-                data: {
-                    public_key: Buffer.from(prekeyBundle.public_key, 'base64')
-                }
-            })
-        }
+        
+        user = await this.prisma.user.update({
+            where: { mobile: prekeyBundle.mobile_number },
+            data: {
+                public_key: Buffer.from(prekeyBundle.public_key, 'base64')
+            }
+        })
 
         let _signed_pre_key: (SignedPreKey | null) = await this.prisma.signedPreKey.findFirst({ where: { user_id: user.id }})
 

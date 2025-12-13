@@ -8,9 +8,10 @@ import { PrismaModule } from './prisma/prisma.module';
 import { KeysModule } from './keys/keys.module';
 import { UsersModule } from './users/users.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
-  imports: [RegisterationModule, WebsocketModule, AuthModule, PrismaModule, KeysModule, UsersModule, AnalyticsModule],
+  imports: [RegisterationModule, WebsocketModule, AuthModule, PrismaModule, KeysModule, UsersModule, AnalyticsModule, RedisModule],
   controllers: [AppController],
   providers: [AppService],
 })
