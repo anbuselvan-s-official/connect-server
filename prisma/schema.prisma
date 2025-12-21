@@ -28,6 +28,24 @@ model User {
   OneTimePreKey OneTimePreKey[]
 
   Profile Profile[]
+
+  alice_conversation Conversation[] @relation("alice")
+  bob_conversation Conversation[] @relation("bob")
+}
+
+model Conversation {
+  id String @id @default(uuid())
+  alice_id String
+  bob_id String
+  last_message_at DateTime @default(now())
+  created_at DateTime @default(now())
+
+  alice User @relation("alice", fields: [alice_id], references: [id])
+  bob User @relation("bob", fields: [bob_id], references: [id])
+
+  @@unique([alice_id, bob_id])
+  @@index([alice_id, last_message_at])
+  @@index([bob_id, last_message_at])
 }
 
 model RefreshToken {

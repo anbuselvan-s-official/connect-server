@@ -9,9 +9,20 @@ import { KeysModule } from './keys/keys.module';
 import { UsersModule } from './users/users.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { RedisModule } from './redis/redis.module';
+import { ConversationModule } from './conversation/conversation.module'
 
 @Module({
-  imports: [RegisterationModule, WebsocketModule, AuthModule, PrismaModule, KeysModule, UsersModule, AnalyticsModule, RedisModule],
+  imports: [
+    RegisterationModule, 
+    WebsocketModule, 
+    AuthModule, 
+    PrismaModule, 
+    KeysModule, 
+    UsersModule, 
+    AnalyticsModule, 
+    RedisModule,
+    ConversationModule
+  ],
   controllers: [AppController],
   providers: [AppService],
 })
