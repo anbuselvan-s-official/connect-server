@@ -44,4 +44,9 @@ export class WebsocketGateway
   handleError(client: Socket, _payload: string) {
     return this.websocketService.onError(client, _payload)
   }
+
+  @SubscribeMessage('activity_status')
+  async handleActivityStatus(client: Socket, payload: string){
+    return this.websocketService.onActivity(client, payload)
+  }
 }

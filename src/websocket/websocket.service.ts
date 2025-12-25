@@ -5,6 +5,7 @@ import { ConversationService } from 'src/conversation/conversation.service'
 import { PrismaService } from 'src/prisma/prisma.service'
 import { RedisService } from 'src/redis/redis.service'
 import { UsersService } from 'src/users/users.service'
+import { ActivityStatusEvent } from 'types/ActivityStatus'
 import type MessagePayload from 'types/MessagePayload'
 
 @Injectable()
@@ -94,6 +95,40 @@ export class WebsocketService {
         if (receiver) {
             this.websocketServer.to(receiver.socket_id).emit('error', JSON.stringify(payload))
             this.logger.log(`onError - from: ${JSON.stringify(sender?.user)} | to: ${JSON.stringify(receiver.user)} | message: ${messagePayload}`)
+        }
+    }
+
+    onActivity(socket: Socket, status_payload: string){
+        try {
+            const payload: ActivityStatusEvent = JSON.parse(status_payload)
+            const sender = this.clients.get(socket.handshake.query.user_id as string)
+            const recipient = this.clients.get(payload.recipient_id)
+    
+            if (!sender) {
+                this.logger.warn('Activity status from unknown sender')
+                return
+            }
+    
+            this.logger.debug(
+                `Activity status: ${sender.user.user_name} → ${payload.status} (to ${payload.recipient_id})`
+            )
+    
+            // Send status to recipient if they're online
+            if (recipient) {
+                this.websocketServer
+                    .to(recipient.socket_id)
+                    .emit('activity_status', status_payload)
+                
+                this.logger.debug(
+                    `Forwarded activity status to ${recipient.user.user_name}`
+                )
+            } else {
+                this.logger.debug(
+                    `Recipient ${payload.recipient_id} is offline, status not sent`
+                )
+            }
+        } catch (error) {
+            this.logger.error(`Error processing activity status: ${error.message}`)
         }
     }
 
