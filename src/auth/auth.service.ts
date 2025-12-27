@@ -9,14 +9,14 @@ import { RedisService } from 'src/redis/redis.service'
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly redis: RedisService) {}
+  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly redis: RedisService) { }
 
   async requestOtp(mobile_number: string) {
     // In real app, send OTP via SMS here
     const dummy_otp = '123456';
     return { success: true, otp: dummy_otp };
   }
-  
+
   async verifyOtp(mobile_number: string, otp: string) {
     const dummyOtp = '123456';
     if (otp !== dummyOtp) {
@@ -67,7 +67,7 @@ export class AuthService {
   }
 
   async refreshTokens(refresh_token?: string) {
-    if(!refresh_token){
+    if (!refresh_token) {
       throw new UnauthorizedException('Missing refresh token')
     }
 

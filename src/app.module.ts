@@ -10,6 +10,8 @@ import { UsersModule } from './users/users.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { RedisModule } from './redis/redis.module';
 import { ConversationModule } from './conversation/conversation.module'
+import { SessionModule } from './session/session.module';
+import { MessageQueueModule } from './message-queue/message-queue.module';
 
 @Module({
   imports: [
@@ -21,7 +23,9 @@ import { ConversationModule } from './conversation/conversation.module'
     UsersModule, 
     AnalyticsModule, 
     RedisModule,
-    ConversationModule
+    ConversationModule,
+    SessionModule,
+    MessageQueueModule
   ],
   controllers: [AppController],
   providers: [AppService],

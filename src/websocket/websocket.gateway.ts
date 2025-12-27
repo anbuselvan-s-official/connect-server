@@ -9,13 +9,15 @@ import {
 
 import { WebsocketService } from './websocket.service'
 import { Server, Socket } from 'socket.io'
-import { Logger } from '@nestjs/common'
+import { Logger, UseFilters } from '@nestjs/common'
+import { WebSocketExceptionFilter } from './websocket-exception.filter'
 
 @WebSocketGateway({
   cors: {
     origin: '*',
   },
 })
+@UseFilters(new WebSocketExceptionFilter())
 export class WebsocketGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 { 

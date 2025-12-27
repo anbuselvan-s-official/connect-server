@@ -1,27 +1,34 @@
-import { Injectable, Logger } from '@nestjs/common'
+import { ConflictException, Injectable, Logger } from '@nestjs/common'
 import { User } from '@prisma/client'
 import { Server, Socket } from 'socket.io'
 import { ConversationService } from 'src/conversation/conversation.service'
+import { MessageQueueService } from 'src/message-queue/message-queue.service'
 import { PrismaService } from 'src/prisma/prisma.service'
 import { RedisService } from 'src/redis/redis.service'
+import { SessionService } from 'src/session/session.service'
 import { UsersService } from 'src/users/users.service'
 import { ActivityStatusEvent } from 'types/ActivityStatus'
 import type MessagePayload from 'types/MessagePayload'
+import { SocketAcknowledge, SocketAckResponse } from 'types/response/SocketAckResponse'
+import { DeviceMismatchException, SelfMessagingException, SessionLockedException } from './exceptions'
+import { WsException } from '@nestjs/websockets'
 
 @Injectable()
 export class WebsocketService {
-    constructor(private readonly prisma: PrismaService, 
-        private readonly redis: RedisService, 
+    constructor(private readonly prisma: PrismaService,
+        private readonly redis: RedisService,
         private readonly users: UsersService,
-        private readonly conversation: ConversationService
+        private readonly conversation: ConversationService,
+        private readonly session: SessionService,
+        private readonly messageQueue: MessageQueueService
     ) { }
 
     private websocketServer: Server
 
     private readonly logger = new Logger(WebsocketService.name)
-    private clients = new Map<string, { user: User, socket_id: string}>()
+    private clients = new Map<string, { user: User, socket_id: string }>()
 
-    setServer(server: Server){
+    setServer(server: Server) {
         this.websocketServer = server
     }
 
@@ -34,10 +41,55 @@ export class WebsocketService {
             this.clients.set(user_id, { user, socket_id: socket.id })
             this.logger.log(`Connected - ${user.user_name} | socket_id: ${socket.id}`)
 
-            // Broadcast online status to top 50 conversation partners
+            // Check for queued messages (Redis first, PostgreSQL fallback)
+            const queuedMessages = await this.messageQueue.getQueuedMessages(user_id)
+
+            if (queuedMessages.length > 0) {
+                this.logger.log(`📦 Delivering ${queuedMessages.length} queued messages to ${user.user_name}`)
+
+                // Group messages by conversation
+                const conversations = new Map<string, MessagePayload[]>()
+
+                for (const message of queuedMessages) {
+                    const conversation_id = await this.getConversationId(message.sender.id, message.receiver.id)
+                    if (!conversations.has(conversation_id)) {
+                        conversations.set(conversation_id, [])
+                    }
+                    conversations.get(conversation_id)!.push(message)
+                }
+
+                // Send queued messages
+                for (const message of queuedMessages) {
+                    this.websocketServer.to(socket.id).emit('message', JSON.stringify({
+                        ...message,
+                        is_queued: true
+                    }))
+                    await new Promise(resolve => setTimeout(resolve, 50))
+                }
+
+                // ✅ Unlock sessions and clear queues with proper error handling
+                for (const [conversation_id] of conversations) {
+                    try {
+                        await this.session.releaseSession(conversation_id)
+                        await this.messageQueue.clearQueue(conversation_id)
+                        this.logger.log(`🔓 Session unlocked and queue cleared for ${conversation_id}`)
+                    } catch (error) {
+                        this.logger.error(`❌ Failed to unlock session ${conversation_id}`, error)
+                        // ✅ Continue with other sessions even if one fails
+                    }
+                }
+
+                // Clear user queue
+                try {
+                    await this.messageQueue.clearUserQueue(user_id)
+                } catch (error) {
+                    this.logger.error(`❌ Failed to clear user queue for ${user_id}`, error)
+                }
+            }
+
             await this.broadcastPresence(user_id, true)
         }
-        this.logger.log(this.handleConnection.name, Array.from(this.clients.values()).map(client => ({ name: client.user.user_name, id: client.user.id, socket: client.socket_id})))
+        this.logClients()
     }
 
     async handleDisconnection(socket: Socket) {
@@ -54,40 +106,66 @@ export class WebsocketService {
             // Broadcast offline status to top 50 conversation partners
             await this.broadcastPresence(user_id, false)
         }
-        this.logger.log(this.handleDisconnection.name, Array.from(this.clients.values()).map(client => ({ name: client.user.user_name, id: client.user.id, socket: client.socket_id})))
+        this.logClients()
     }
 
-    async onMessage(socket: Socket, messagePayload: string) {
-        this.logger.log(this.onMessage.name, Array.from(this.clients.values()).map(client => ({ name: client.user.user_name, id: client.user.id, socket: client.socket_id})))
+    async onMessage(socket: Socket, messagePayload: string): Promise<SocketAckResponse> {
+        this.logClients()
+    
         const payload: MessagePayload = JSON.parse(messagePayload)
-        const sender = this.clients.get(socket.handshake.query.user_id as string)!!
+        const sender = this.clients.get(socket.handshake.query.user_id as string)
         const receiver = this.clients.get(payload.receiver.id)
-
-        if(sender?.user.id == receiver?.user.id){
+    
+        if (sender?.user.id === receiver?.user.id) {
             this.logger.warn(`Self-messaging attempt by user ${sender?.user.id}`)
-            return
+            throw new SelfMessagingException()  // ✅ Let it bubble up
         }
-        
-        if (receiver) {
-            const receipient_user = await this.users.getUser(receiver?.user.id || '')
-
-            if(payload.receiver.device_id === receipient_user.device_id){
-                this.websocketServer.to(receiver.socket_id).emit('message', JSON.stringify(payload))
-                this.logger.log(`📨 Message: ${sender?.user.user_name} → ${receiver.user.user_name}`)
-
-                this.conversation.updateConversation(sender.user.id, receiver.user.id)
-                        .catch(err => this.logger.error('Failed to update conversation', err))
+    
+        const conversation_id = await this.getConversationId(sender!.user.id, payload.receiver.id)
+        const session = await this.session.getSession(conversation_id)
+    
+        if (session && session.locked_by !== sender!.user.id) {
+            const queueCount = await this.messageQueue.getQueueCount(conversation_id)
+            this.logger.warn(`🔒 Message rejected - session locked by ${session.locked_by}`)
+            throw new SessionLockedException(session.locked_by, queueCount)  // ✅ Let it bubble up
+        }
+    
+        if (!receiver) {
+            await this.session.lockSession(conversation_id, sender!.user.id, 'OFFLINE_RECIPIENT')
+            await this.messageQueue.enqueueMessage(payload)
+            this.logger.log(`📦 Message queued for offline user ${payload.receiver.id}`)
+            await this.conversation.updateConversation(sender!.user.id, payload.receiver.id)
+                .catch(err => this.logger.error('Failed to update conversation', err))
+    
+            return {
+                code: 202,
+                status: SocketAcknowledge.QUEUED,
+                reason: 'Recipient is offline. Message queued for delivery.'
             }
-            else {
-                payload.payload = 'DEVICE_ID_MISMATCH'
-                socket.emit('error', JSON.stringify(payload))
-                this.logger.warn(`Device ID mismatch: expected ${receipient_user.device_id}, got ${payload.device_id}`)
-            }
+        }
+    
+        const recipientUser = await this.users.getUser(receiver.user.id)
+    
+        if (payload.receiver.device_id !== recipientUser.device_id) {
+            this.logger.warn(`Device ID mismatch: expected ${recipientUser.device_id}, got ${payload.receiver.device_id}`)
+            throw new DeviceMismatchException(recipientUser.device_id, payload.receiver.device_id)  // ✅ Let it bubble up
+        }
+    
+        this.websocketServer.to(receiver.socket_id).emit('message', JSON.stringify(payload))
+        this.logger.log(`📨 Message delivered: ${sender?.user.user_name} → ${receiver.user.user_name}`)
+        await this.conversation.updateConversation(sender!.user.id, receiver.user.id)
+            .catch(err => this.logger.error('Failed to update conversation', err))
+    
+        return {
+            code: 200,
+            status: SocketAcknowledge.DELIVERED,
+            reason: 'Message delivered successfully'
         }
     }
+    
 
     onError(socket: Socket, messagePayload: string) {
-        this.logger.log(this.onError.name, Array.from(this.clients.values()).map(client => ({ name: client.user.user_name, id: client.user.id, socket: client.socket_id})))
+        this.logClients(this.onError.name)
         const payload: MessagePayload = JSON.parse(messagePayload)
         const sender = this.clients.get(socket.handshake.query.user_id as string)
         const receiver = this.clients.get(payload.receiver.id)
@@ -98,27 +176,27 @@ export class WebsocketService {
         }
     }
 
-    onActivity(socket: Socket, status_payload: string){
+    onActivity(socket: Socket, status_payload: string) {
         try {
             const payload: ActivityStatusEvent = JSON.parse(status_payload)
             const sender = this.clients.get(socket.handshake.query.user_id as string)
             const recipient = this.clients.get(payload.recipient_id)
-    
+
             if (!sender) {
                 this.logger.warn('Activity status from unknown sender')
                 return
             }
-    
+
             this.logger.debug(
                 `Activity status: ${sender.user.user_name} → ${payload.status} (to ${payload.recipient_id})`
             )
-    
+
             // Send status to recipient if they're online
             if (recipient) {
                 this.websocketServer
                     .to(recipient.socket_id)
                     .emit('activity_status', status_payload)
-                
+
                 this.logger.debug(
                     `Forwarded activity status to ${recipient.user.user_name}`
                 )
@@ -132,10 +210,10 @@ export class WebsocketService {
         }
     }
 
-    async broadcastPresence(user_id: string, status: boolean){
+    async broadcastPresence(user_id: string, status: boolean) {
         const partners = await this.conversation.broadCastOnlineStatus(user_id)
 
-        if(!partners || partners.length == 0){
+        if (!partners || partners.length == 0) {
             this.logger.debug(`No conversation partners found for user ${user_id}`)
             return
         }
@@ -163,5 +241,27 @@ export class WebsocketService {
         }
 
         this.logger.log(`Presence broadcast sent to ${broadcast_count}/${partners.length} online partners`)
+    }
+
+    private async getConversationId(userId1: string, userId2: string): Promise<string> {
+        const [alice_id, bob_id] = [userId1, userId2].sort()
+
+        const conversation = await this.prisma.conversation.findUnique({
+            where: { alice_id_bob_id: { alice_id, bob_id } }
+        })
+
+        if (conversation) {
+            return conversation.id
+        }
+
+        const newConversation = await this.prisma.conversation.create({
+            data: { alice_id, bob_id, last_message_at: new Date() }
+        })
+
+        return newConversation.id
+    }
+
+    private logClients(message?: string) {
+        this.logger.log(message ?? WebsocketService.name, 'Clients : ' + Array.from(this.clients.values()).map(client => client.user.user_name))
     }
 }
