@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
 import { User } from '@prisma/client'
 import { Server, Socket } from 'socket.io'
 import { ConversationService } from 'src/conversation/conversation.service'
@@ -11,8 +11,6 @@ import { ActivityStatusEvent } from 'types/ActivityStatus'
 import type MessagePayload from 'types/MessagePayload'
 import { SocketAcknowledge, SocketAckResponse } from 'types/response/SocketAckResponse'
 import { DeviceMismatchException, SelfMessagingException, SessionLockedException } from './exceptions'
-import { WsException } from '@nestjs/websockets'
-import { env, send } from 'process'
 
 type SocketClient = {
     user: User,
