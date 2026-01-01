@@ -12,6 +12,12 @@ import type MessagePayload from 'types/MessagePayload'
 import { SocketAcknowledge, SocketAckResponse } from 'types/response/SocketAckResponse'
 import { DeviceMismatchException, SelfMessagingException, SessionLockedException } from './exceptions'
 import { WsException } from '@nestjs/websockets'
+import { env, send } from 'process'
+
+type SocketClient = {
+    user: User,
+    socket_id: string
+}
 
 @Injectable()
 export class WebsocketService {
@@ -26,48 +32,87 @@ export class WebsocketService {
     private websocketServer: Server
 
     private readonly logger = new Logger(WebsocketService.name)
-    private clients = new Map<string, { user: User, socket_id: string }>()
+    private clients = new Map<string, SocketClient>()
 
     setServer(server: Server) {
         this.websocketServer = server
     }
 
     async handleConnection(socket: Socket) {
-        const user_id = socket.handshake.query.user_id as string
+        const user_id = socket.handshake.query.user_id as string || ''
         const user = await this.prisma.user.findUnique({ where: { id: user_id } })
+    
+        if (!user) {
+            this.logger.warn(`User not found: ${user_id}`)
+            return
+        }
 
-        if (user) {
-            await this.redis.addOnlineUser(user_id)
-            this.clients.set(user_id, { user, socket_id: socket.id })
-            this.logger.log(`Connected - ${user.user_name} | socket_id: ${socket.id}`)
+        if(this.clients.has(user_id)){
+            this.logger.log(WebsocketService.name, 'Duplicate connection for the user id ' + user.user_name)
+            return
+        }
+    
+        // Add to clients FIRST
+        await this.redis.addOnlineUser(user_id)
+        this.clients.set(user_id, { user, socket_id: socket.id })
+        this.logger.log(`Connected - ${user.user_name} | socket_id: ${socket.id}`)
 
-            // Check for queued messages (Redis first, PostgreSQL fallback)
-            const queuedMessages = await this.messageQueue.getQueuedMessages(user_id)
-
-            if (queuedMessages.length > 0) {
-                this.logger.log(`📦 Delivering ${queuedMessages.length} queued messages to ${user.user_name}`)
-
-                // Group messages by conversation
-                const conversations = new Map<string, MessagePayload[]>()
-
-                for (const message of queuedMessages) {
-                    const conversation_id = await this.getConversationId(message.sender.id, message.receiver.id)
-                    if (!conversations.has(conversation_id)) {
-                        conversations.set(conversation_id, [])
+        // Check for queued messages
+        const queuedMessages = await this.messageQueue.getQueuedMessages(user_id)
+    
+        if (queuedMessages.length > 0) {
+            this.logger.log(`📦 Delivering ${queuedMessages.length} queued messages to ${user.user_name}`)
+    
+            // Group messages by conversation
+            const conversations = new Map<string, MessagePayload[]>()
+    
+            for (const message of queuedMessages) {
+                const conversation_id = await this.getConversationId(message.sender.id, message.receiver.id)
+                if (!conversations.has(conversation_id)) {
+                    conversations.set(conversation_id, [])
+                }
+                conversations.get(conversation_id)!.push(message)
+            }
+    
+            // Get the receiver (current user who just connected)
+            const receiver = this.clients.get(user_id)
+    
+            // Track delivery results
+            let deliveredCount = 0
+            let failedCount = 0
+    
+            // Send each message using the existing sendMessage logic
+            for (const message of queuedMessages) {
+                try {
+                    // Get sender (might be undefined if sender is offline)
+                    const sender = this.clients.get(message.sender.id)
+    
+                    // Use sendMessage with isQueuedDelivery flag
+                    const result = await this.sendMessage(message, sender, receiver, true)
+    
+                    if (result) {
+                        // Message was queued again (receiver disconnected)
+                        this.logger.warn(`⚠️ Receiver disconnected during queue delivery`)
+                        failedCount++
+                        break  // Stop sending
+                    } else {
+                        // Message delivered successfully
+                        deliveredCount++
                     }
-                    conversations.get(conversation_id)!.push(message)
-                }
-
-                // Send queued messages
-                for (const message of queuedMessages) {
-                    this.websocketServer.to(socket.id).emit('message', JSON.stringify({
-                        ...message,
-                        is_queued: true
-                    }))
+    
+                    // Small delay between messages
                     await new Promise(resolve => setTimeout(resolve, 50))
+                } catch (error) {
+                    this.logger.error(`Failed to deliver queued message`, error)
+                    failedCount++
+                    break
                 }
-
-                // ✅ Unlock sessions and clear queues with proper error handling
+            }
+    
+            this.logger.log(`✅ Delivered ${deliveredCount}/${queuedMessages.length} queued messages (${failedCount} failed)`)
+    
+            // Only unlock and clear if ALL messages were delivered
+            if (deliveredCount === queuedMessages.length) {
                 for (const [conversation_id] of conversations) {
                     try {
                         await this.session.releaseSession(conversation_id)
@@ -75,24 +120,25 @@ export class WebsocketService {
                         this.logger.log(`🔓 Session unlocked and queue cleared for ${conversation_id}`)
                     } catch (error) {
                         this.logger.error(`❌ Failed to unlock session ${conversation_id}`, error)
-                        // ✅ Continue with other sessions even if one fails
                     }
                 }
-
-                // Clear user queue
+    
                 try {
                     await this.messageQueue.clearUserQueue(user_id)
                 } catch (error) {
                     this.logger.error(`❌ Failed to clear user queue for ${user_id}`, error)
                 }
+            } else {
+                this.logger.warn(`⚠️ Not clearing queue - only ${deliveredCount}/${queuedMessages.length} delivered`)
             }
-
-            await this.broadcastPresence(user_id, true)
         }
+    
+        await this.broadcastPresence(user_id, true)
         this.logClients()
     }
 
     async handleDisconnection(socket: Socket) {
+        this.logClients()
         const user_id = socket.handshake.query.user_id as string
         const client = this.clients.get(user_id)
 
@@ -111,58 +157,41 @@ export class WebsocketService {
 
     async onMessage(socket: Socket, messagePayload: string): Promise<SocketAckResponse> {
         this.logClients()
-    
+        this.logger.log('OnMessage', messagePayload)
+
         const payload: MessagePayload = JSON.parse(messagePayload)
         const sender = this.clients.get(socket.handshake.query.user_id as string)
         const receiver = this.clients.get(payload.receiver.id)
-    
+
         if (sender?.user.id === receiver?.user.id) {
             this.logger.warn(`Self-messaging attempt by user ${sender?.user.id}`)
-            throw new SelfMessagingException()  // ✅ Let it bubble up
+            throw new SelfMessagingException()
         }
-    
-        const conversation_id = await this.getConversationId(sender!.user.id, payload.receiver.id)
-        const session = await this.session.getSession(conversation_id)
-    
-        if (session && session.locked_by !== sender!.user.id) {
-            const queueCount = await this.messageQueue.getQueueCount(conversation_id)
-            this.logger.warn(`🔒 Message rejected - session locked by ${session.locked_by}`)
-            throw new SessionLockedException(session.locked_by, queueCount)  // ✅ Let it bubble up
+
+        const ack = await this.sendMessage(payload, sender, receiver)
+
+        if(ack){
+            return ack
         }
-    
-        if (!receiver) {
-            await this.session.lockSession(conversation_id, sender!.user.id, 'OFFLINE_RECIPIENT')
-            await this.messageQueue.enqueueMessage(payload)
-            this.logger.log(`📦 Message queued for offline user ${payload.receiver.id}`)
-            await this.conversation.updateConversation(sender!.user.id, payload.receiver.id)
-                .catch(err => this.logger.error('Failed to update conversation', err))
-    
-            return {
-                code: 202,
-                status: SocketAcknowledge.QUEUED,
-                reason: 'Recipient is offline. Message queued for delivery.'
-            }
-        }
-    
-        const recipientUser = await this.users.getUser(receiver.user.id)
-    
+
+        const recipientUser = await this.users.getUser(receiver?.user?.id || '')
+
         if (payload.receiver.device_id !== recipientUser.device_id) {
             this.logger.warn(`Device ID mismatch: expected ${recipientUser.device_id}, got ${payload.receiver.device_id}`)
             throw new DeviceMismatchException(recipientUser.device_id, payload.receiver.device_id)  // ✅ Let it bubble up
         }
-    
-        this.websocketServer.to(receiver.socket_id).emit('message', JSON.stringify(payload))
-        this.logger.log(`📨 Message delivered: ${sender?.user.user_name} → ${receiver.user.user_name}`)
-        await this.conversation.updateConversation(sender!.user.id, receiver.user.id)
+
+        this.logger.log(`📨 Message delivered: ${sender?.user.user_name} → ${receiver?.user.user_name}`)
+        await this.conversation.updateConversation(sender?.user.id || '', receiver?.user.id || '')
             .catch(err => this.logger.error('Failed to update conversation', err))
-    
+
         return {
             code: 200,
             status: SocketAcknowledge.DELIVERED,
             reason: 'Message delivered successfully'
         }
     }
-    
+
 
     onError(socket: Socket, messagePayload: string) {
         this.logClients(this.onError.name)
@@ -187,23 +216,11 @@ export class WebsocketService {
                 return
             }
 
-            this.logger.debug(
-                `Activity status: ${sender.user.user_name} → ${payload.status} (to ${payload.recipient_id})`
-            )
-
             // Send status to recipient if they're online
             if (recipient) {
                 this.websocketServer
                     .to(recipient.socket_id)
                     .emit('activity_status', status_payload)
-
-                this.logger.debug(
-                    `Forwarded activity status to ${recipient.user.user_name}`
-                )
-            } else {
-                this.logger.debug(
-                    `Recipient ${payload.recipient_id} is offline, status not sent`
-                )
             }
         } catch (error) {
             this.logger.error(`Error processing activity status: ${error.message}`)
@@ -264,4 +281,84 @@ export class WebsocketService {
     private logClients(message?: string) {
         this.logger.log(message ?? WebsocketService.name, 'Clients : ' + Array.from(this.clients.values()).map(client => client.user.user_name))
     }
+
+    private emitToTarget(target_id: string, payload: string, event: string = 'message'): Promise<{ received: boolean }> {
+        return new Promise((resolve, reject) => {
+            const socket = this.websocketServer.sockets.sockets.get(target_id)
+
+            if (socket) {
+                socket
+                    .timeout(3000)
+                    .emit(event, payload, (error: Error, ack: { received: boolean }) => {
+                        if (error) {
+                            console.error('Error', error)
+                            resolve({ received: false })
+                        }
+                        else {
+                            console.log('Ack', ack)
+                            resolve(ack)
+                        }
+                    })
+            }
+            else {
+                resolve({ received: false })
+            }
+        })
+    }
+
+    private async sendMessage(
+        payload: MessagePayload, 
+        sender?: SocketClient, 
+        receiver?: SocketClient,
+        isQueuedDelivery: boolean = false
+    ): Promise<SocketAckResponse | undefined> {
+        const conversation_id = await this.getConversationId(
+            sender?.user.id || payload.sender.id,
+            payload.receiver.id
+        )
+    
+        // Skip session lock check for queued delivery (session already locked)
+        if (!isQueuedDelivery) {
+            const session = await this.session.getSession(conversation_id)
+    
+            if (session && session.locked_by !== sender?.user.id) {
+                const queueCount = await this.messageQueue.getQueueCount(conversation_id)
+                this.logger.warn(`🔒 Message rejected - session locked by ${session.locked_by}`)
+                throw new SessionLockedException(session.locked_by, queueCount)
+            }
+        }
+    
+        // Try to emit with acknowledgment (no is_queued flag)
+        const ack = await this.emitToTarget(receiver?.socket_id || '', JSON.stringify(payload))
+    
+        if (!receiver || !ack.received) {
+            // For queued delivery, if it fails, don't re-queue
+            if (isQueuedDelivery) {
+                this.logger.warn(`⚠️ Queued message delivery failed for ${payload.receiver.id}`)
+                return {
+                    code: 202,
+                    status: SocketAcknowledge.QUEUED,
+                    reason: 'Recipient disconnected during queue delivery.'
+                }
+            }
+    
+            // For new messages, queue them
+            await this.session.lockSession(conversation_id, sender?.user.id || payload.sender.id, 'OFFLINE_RECIPIENT')
+            await this.messageQueue.enqueueMessage(payload)
+    
+            this.logger.log(`📦 Message queued for offline user ${payload.receiver.id}`)
+            await this.conversation.updateConversation(sender?.user.id || payload.sender.id, payload.receiver.id)
+                .catch(err => this.logger.error('Failed to update conversation', err))
+    
+            return {
+                code: 202,
+                status: SocketAcknowledge.QUEUED,
+                reason: 'Recipient is offline. Message queued for delivery.'
+            }
+        }
+    
+        // Message delivered successfully
+        return undefined
+    }
+    
 }

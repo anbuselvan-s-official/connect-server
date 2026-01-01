@@ -31,7 +31,7 @@ export class MessageQueueService {
                     conversation_id: conversation_id,
                     sender_id: payload.sender.id,
                     receiver_id: payload.receiver.id,
-                    payload: payload.payload,
+                    payload: JSON.stringify(payload.payload),
                     device_id: payload.receiver.device_id,
                     timestamp: BigInt(payload.timestamp)
                 }
@@ -78,7 +78,7 @@ export class MessageQueueService {
                     id: msg.receiver_id,
                     device_id: msg.device_id
                 },
-                payload: msg.payload,
+                payload: JSON.parse(msg.payload),
                 device_id: msg.device_id,
                 timestamp: Number(msg.timestamp)
             }))

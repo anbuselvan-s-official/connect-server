@@ -15,7 +15,7 @@ import { WebSocketExceptionFilter } from './websocket-exception.filter'
 @WebSocketGateway({
   cors: {
     origin: '*',
-  },
+  }
 })
 @UseFilters(new WebSocketExceptionFilter())
 export class WebsocketGateway
