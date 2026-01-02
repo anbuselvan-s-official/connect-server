@@ -126,10 +126,14 @@ export class WebsocketService {
                 } catch (error) {
                     this.logger.error(`❌ Failed to clear user queue for ${user_id}`, error)
                 }
+
             } else {
                 this.logger.warn(`⚠️ Not clearing queue - only ${deliveredCount}/${queuedMessages.length} delivered`)
             }
         }
+        
+        await this.emitToTarget(socket.id, 'true', 'idle')
+        this.logger.log(WebsocketService.name, 'Pipe is idle')
     
         await this.broadcastPresence(user_id, true)
         this.logClients()
@@ -261,19 +265,14 @@ export class WebsocketService {
     private async getConversationId(userId1: string, userId2: string): Promise<string> {
         const [alice_id, bob_id] = [userId1, userId2].sort()
 
-        const conversation = await this.prisma.conversation.findUnique({
-            where: { alice_id_bob_id: { alice_id, bob_id } }
+        // Use upsert to handle race conditions
+        const conversation = await this.prisma.conversation.upsert({
+            where: { alice_id_bob_id: { alice_id, bob_id } },
+            update: {},  // Don't update anything if it exists
+            create: { alice_id, bob_id, last_message_at: new Date() }
         })
 
-        if (conversation) {
-            return conversation.id
-        }
-
-        const newConversation = await this.prisma.conversation.create({
-            data: { alice_id, bob_id, last_message_at: new Date() }
-        })
-
-        return newConversation.id
+        return conversation.id
     }
 
     private logClients(message?: string) {
