@@ -331,12 +331,44 @@ yarn test:watch
 
 ## 📝 Environment Variables
 
+### Database Configuration
+
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `DATABASE_URL` | PostgreSQL connection string | - | ✅ |
-| `JWT_SECRET` | Secret key for JWT signing | - | ✅ |
+| `DATABASE_URL` | PostgreSQL connection string (used by Prisma) | - | ✅ |
+| `POSTGRES_USER` | PostgreSQL username | `connect` | ✅ |
+| `POSTGRES_PASSWORD` | PostgreSQL password | `connect` | ✅ |
+| `POSTGRES_DB` | PostgreSQL database name | `connect` | ✅ |
+| `POSTGRES_PORT` | PostgreSQL port | `5432` | ❌ |
+
+### Application Configuration
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
 | `PORT` | Application port | `3000` | ❌ |
-| `NODE_ENV` | Environment mode | `development` | ❌ |
+| `DEV_PORT` | Development port | `3001` | ❌ |
+| `NODE_ENV` | Environment mode (`development`, `production`, `test`) | `development` | ❌ |
+| `FEATURE` | Feature flag for experimental features | `true` | ❌ |
+
+### Authentication Configuration
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `ACCESS_TOKEN_SECRET` | Secret key for JWT access token signing | `access-secret` | ✅ |
+| `REFRESH_TOKEN_SECRET` | Secret key for JWT refresh token signing | `refresh-secret` | ✅ |
+
+**Note:** Default values are used only if not specified. For production, always set strong secret keys.
+
+### Redis Configuration
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `REDIS_HOST` | Redis server host | `localhost` | ❌ |
+| `REDIS_PORT` | Redis server port | `6379` | ❌ |
+| `REDIS_PASSWORD` | Redis authentication password | - | ❌ |
+| `REDIS_DB` | Redis database number | `0` | ❌ |
+
+**Note:** Redis is used for session management, message queuing, and caching online users.
 
 ## 🚧 Roadmap
 
