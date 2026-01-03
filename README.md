@@ -61,21 +61,40 @@ yarn start:dev
 
 ## ⚙️ Configuration
 
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory with the following variables:
 
 ```bash
+# Database Configuration
+DATABASE_URL=postgresql://username:password@localhost:5432/connect?schema=public
+POSTGRES_USER=connect
+POSTGRES_PASSWORD=connect
+POSTGRES_DB=connect
+POSTGRES_PORT=5432
+
 # Application Configuration
 PORT=3000
+DEV_PORT=3001
 NODE_ENV=development
 
-# Database URL (used by Prisma)
-DATABASE_URL=postgresql://username:password@localhost:5432/connect_db?schema=public
+# JWT Configuration (Authentication)
+ACCESS_TOKEN_SECRET=your-super-secret-access-token-key-change-in-production
+REFRESH_TOKEN_SECRET=your-super-secret-refresh-token-key-change-in-production
 
-# JWT Configuration
-JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+# Redis Configuration (Session & Caching)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_DB=0
+
+# Feature Flags
+FEATURE=true
 ```
 
-**Note**: Replace `username` and `password` with your PostgreSQL credentials.
+**Important Notes:**
+- Replace `username` and `password` in `DATABASE_URL` with your PostgreSQL credentials
+- Change all secret keys in production to strong, randomly generated values
+- `REDIS_PASSWORD` can be left empty if Redis is running without authentication (development only)
+- For production, use strong passwords and enable Redis authentication
 
 ## 🏃 Running the Application
 
