@@ -61,21 +61,40 @@ yarn start:dev
 
 ## ⚙️ Configuration
 
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory with the following variables:
 
 ```bash
+# Database Configuration
+DATABASE_URL=postgresql://username:password@localhost:5432/connect?schema=public
+POSTGRES_USER=connect
+POSTGRES_PASSWORD=connect
+POSTGRES_DB=connect
+POSTGRES_PORT=5432
+
 # Application Configuration
 PORT=3000
+DEV_PORT=3001
 NODE_ENV=development
 
-# Database URL (used by Prisma)
-DATABASE_URL=postgresql://username:password@localhost:5432/connect_db?schema=public
+# JWT Configuration (Authentication)
+ACCESS_TOKEN_SECRET=your-super-secret-access-token-key-change-in-production
+REFRESH_TOKEN_SECRET=your-super-secret-refresh-token-key-change-in-production
 
-# JWT Configuration
-JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+# Redis Configuration (Session & Caching)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_DB=0
+
+# Feature Flags
+FEATURE=true
 ```
 
-**Note**: Replace `username` and `password` with your PostgreSQL credentials.
+**Important Notes:**
+- Replace `username` and `password` in `DATABASE_URL` with your PostgreSQL credentials
+- Change all secret keys in production to strong, randomly generated values
+- `REDIS_PASSWORD` can be left empty if Redis is running without authentication (development only)
+- For production, use strong passwords and enable Redis authentication
 
 ## 🏃 Running the Application
 
@@ -312,12 +331,44 @@ yarn test:watch
 
 ## 📝 Environment Variables
 
+### Database Configuration
+
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `DATABASE_URL` | PostgreSQL connection string | - | ✅ |
-| `JWT_SECRET` | Secret key for JWT signing | - | ✅ |
+| `DATABASE_URL` | PostgreSQL connection string (used by Prisma) | - | ✅ |
+| `POSTGRES_USER` | PostgreSQL username | `connect` | ✅ |
+| `POSTGRES_PASSWORD` | PostgreSQL password | `connect` | ✅ |
+| `POSTGRES_DB` | PostgreSQL database name | `connect` | ✅ |
+| `POSTGRES_PORT` | PostgreSQL port | `5432` | ❌ |
+
+### Application Configuration
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
 | `PORT` | Application port | `3000` | ❌ |
-| `NODE_ENV` | Environment mode | `development` | ❌ |
+| `DEV_PORT` | Development port | `3001` | ❌ |
+| `NODE_ENV` | Environment mode (`development`, `production`, `test`) | `development` | ❌ |
+| `FEATURE` | Feature flag for experimental features | `true` | ❌ |
+
+### Authentication Configuration
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `ACCESS_TOKEN_SECRET` | Secret key for JWT access token signing | `access-secret` | ✅ |
+| `REFRESH_TOKEN_SECRET` | Secret key for JWT refresh token signing | `refresh-secret` | ✅ |
+
+**Note:** Default values are used only if not specified. For production, always set strong secret keys.
+
+### Redis Configuration
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `REDIS_HOST` | Redis server host | `localhost` | ❌ |
+| `REDIS_PORT` | Redis server port | `6379` | ❌ |
+| `REDIS_PASSWORD` | Redis authentication password | - | ❌ |
+| `REDIS_DB` | Redis database number | `0` | ❌ |
+
+**Note:** Redis is used for session management, message queuing, and caching online users.
 
 ## 🚧 Roadmap
 

@@ -30,22 +30,47 @@ model User {
   Profile Profile[]
 
   alice_conversation Conversation[] @relation("alice")
-  bob_conversation Conversation[] @relation("bob")
+  bob_conversation   Conversation[] @relation("bob")
 }
 
 model Conversation {
-  id String @id @default(uuid())
-  alice_id String
-  bob_id String
+  id              String   @id @default(uuid())
+  alice_id        String
+  bob_id          String
   last_message_at DateTime @default(now())
-  created_at DateTime @default(now())
+  created_at      DateTime @default(now())
 
   alice User @relation("alice", fields: [alice_id], references: [id])
-  bob User @relation("bob", fields: [bob_id], references: [id])
+  bob   User @relation("bob", fields: [bob_id], references: [id])
 
   @@unique([alice_id, bob_id])
   @@index([alice_id, last_message_at])
   @@index([bob_id, last_message_at])
+}
+
+model Session {
+  id        String @id @unique
+  locked_by String
+  locked_at DateTime @default(now())
+  reason    String
+
+  @@index([id])
+  @@index([locked_by])
+  @@index([locked_at])
+}
+
+model QueuedMessage {
+  id              String   @id @default(uuid())
+  conversation_id String
+  sender_id       String
+  receiver_id     String
+  payload         String   @db.Text
+  device_id       String
+  timestamp       BigInt
+  created_at      DateTime @default(now())
+  
+  @@index([receiver_id, created_at])
+  @@index([conversation_id, created_at])
 }
 
 model RefreshToken {
