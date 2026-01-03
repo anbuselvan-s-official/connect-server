@@ -11,6 +11,7 @@ import { ActivityStatusEvent } from 'types/ActivityStatus'
 import type MessagePayload from 'types/MessagePayload'
 import { SocketAcknowledge, SocketAckResponse } from 'types/response/SocketAckResponse'
 import { DeviceMismatchException, SelfMessagingException, SessionLockedException } from './exceptions'
+import { WsException } from '@nestjs/websockets'
 
 type SocketClient = {
     user: User,
@@ -157,7 +158,7 @@ export class WebsocketService {
         this.logClients()
     }
 
-    async onMessage(socket: Socket, messagePayload: string): Promise<SocketAckResponse> {
+    async onMessage(socket: Socket, messagePayload: string): Promise<SocketAckResponse | undefined> {
         this.logClients()
         this.logger.log('OnMessage', messagePayload)
 
@@ -165,32 +166,39 @@ export class WebsocketService {
         const sender = this.clients.get(socket.handshake.query.user_id as string)
         const receiver = this.clients.get(payload.receiver.id)
 
-        if (sender?.user.id === receiver?.user.id) {
-            this.logger.warn(`Self-messaging attempt by user ${sender?.user.id}`)
-            throw new SelfMessagingException()
+        try {
+            if (sender?.user.id === receiver?.user.id) {
+                this.logger.warn(`Self-messaging attempt by user ${sender?.user.id}`)
+                throw new SelfMessagingException()
+            }
+    
+            const ack = await this.sendMessage(payload, sender, receiver)
+    
+            if(ack){
+                return ack
+            }
+    
+            const recipientUser = await this.users.getUser(receiver?.user?.id || '')
+    
+            if (payload.receiver.device_id !== recipientUser.device_id) {
+                this.logger.warn(`Device ID mismatch: expected ${recipientUser.device_id}, got ${payload.receiver.device_id}`)
+                throw new DeviceMismatchException(recipientUser.device_id, payload.receiver.device_id)
+            }
+    
+            this.logger.log(`📨 Message delivered: ${sender?.user.user_name} → ${receiver?.user.user_name}`)
+            await this.conversation.updateConversation(sender?.user.id || '', receiver?.user.id || '')
+                .catch(err => this.logger.error('Failed to update conversation', err))
+    
+            return {
+                code: 200,
+                status: SocketAcknowledge.DELIVERED,
+                reason: 'Message delivered successfully'
+            }
         }
-
-        const ack = await this.sendMessage(payload, sender, receiver)
-
-        if(ack){
-            return ack
-        }
-
-        const recipientUser = await this.users.getUser(receiver?.user?.id || '')
-
-        if (payload.receiver.device_id !== recipientUser.device_id) {
-            this.logger.warn(`Device ID mismatch: expected ${recipientUser.device_id}, got ${payload.receiver.device_id}`)
-            throw new DeviceMismatchException(recipientUser.device_id, payload.receiver.device_id)  // ✅ Let it bubble up
-        }
-
-        this.logger.log(`📨 Message delivered: ${sender?.user.user_name} → ${receiver?.user.user_name}`)
-        await this.conversation.updateConversation(sender?.user.id || '', receiver?.user.id || '')
-            .catch(err => this.logger.error('Failed to update conversation', err))
-
-        return {
-            code: 200,
-            status: SocketAcknowledge.DELIVERED,
-            reason: 'Message delivered successfully'
+        catch(error){
+            if(error instanceof WsException) {
+                return error.getError() as SocketAckResponse
+            }
         }
     }
 
